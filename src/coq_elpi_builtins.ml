@@ -986,31 +986,45 @@ It undestands qualified names, e.g. "Nat.t". It's a fatal error if Name cannot b
      let sigma = get_sigma state in
      if not (is_mutual_inductive_entry_ground me sigma) then
        err Pp.(str"coq.env.add-indt: the inductive type declaration must be ground. Did you forge to call coq.typecheck-indt-decl?");
-     let mind =
-       DeclareInd.declare_mutual_inductive_with_eliminations me UnivNames.empty_binders ind_impls in
-     let ind = mind, 0 in
-     begin match record_info with
-     | None -> () (* regular inductive *)
-     | Some field_specs -> (* record: projection... *)
-         let names, flags =
-           List.(split (map (fun { name; is_coercion; is_canonical } -> name,
-               { Record.pf_subclass = is_coercion ; pf_canonical = is_canonical })
-             field_specs)) in
-         let is_implicit = List.map (fun _ -> []) names in
-         let rsp = ind in
-         let cstr = (rsp,1) in
-         let open Entries in
-         let k_ty = List.(hd (hd me.mind_entry_inds).mind_entry_lc) in
-         let fields_as_relctx = Term.prod_assum k_ty in
-         let kinds, sp_projs =
-           Record.declare_projections rsp ~kind:Decls.Definition
-             (Evd.univ_entry ~poly:false sigma)
-             (Names.Id.of_string "record")
-             flags is_implicit fields_as_relctx
-         in
-         Record.declare_structure_entry
-           (cstr, List.rev kinds, List.rev sp_projs);
-     end;
+     let ind =
+       begin match record_info with
+     | None ->
+       (* regular inductive *)
+       let mind =
+         DeclareInd.declare_mutual_inductive_with_eliminations me UnivNames.empty_binders ind_impls in
+       mind, 0
+     | Some field_specs ->
+       let open Vernacexpr in
+       let mk_field_ast { name; is_coercion; is_canonical } : local_decl_expr * record_field_attr =
+         let attrs =
+           { rf_subclass = None
+           ; rf_priority = None
+           ; rf_notation = []
+           ; rf_canonical = is_canonical
+           } in
+         (* let k_ty = List.(hd Entries.((hd me.mind_entry_inds).mind_entry_lc)) *)
+         let ty = Obj.magic 0 in
+         let fdecl = AssumExpr (CAst.make name, ty) in
+         fdecl, attrs
+       in
+       let record_ast =
+         { Record.Ast.name = CAst.make (Id.of_string "record")
+         ; is_coercion = false
+         ; binders = [] (* : local_binder_expr list *)
+         ; cfs = List.map mk_field_ast field_specs
+         ; idbuild = Id.of_string "Build" (* constructor name *)
+         ; sort = None (* : constr_expr option *)
+         }
+       in
+       let gref = Record.definition_structure None
+           Vernacexpr.Record ~template:None
+           ~cumulative:false ~poly:false Declarations.BiFinite [record_ast] in
+       match gref with
+       | [GlobRef.IndRef mind] ->
+         mind
+       | _ ->
+         CErrors.anomaly (Pp.str "Record declaration didn't return an inductive reference.")
+     end in
      state, !: ind, []))),
   DocAbove);
 
